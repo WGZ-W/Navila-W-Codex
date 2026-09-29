@@ -36,6 +36,7 @@ class DataArguments:
 
     # for video training
     num_video_frames: int = 8
+    history_num_frames: int = 4
     fps: float = 0.0  # 0.0 means we do not use fps at all. Always sample the same number of frames.
 
 
@@ -60,6 +61,11 @@ class ModelArguments:
     num_time_tokens: int = 0
     time_token_format: str = "<t{t}>"
     soft_ce_std: float = 1.0
+    enable_action_head: bool = False
+    num_actions: int = 10
+    action_head_dropout: float = 0.0
+    action_loss_weight: float = 1.0
+    enable_history_mamba: bool = False
 
 
 @dataclass
@@ -71,6 +77,9 @@ class TrainingArguments(transformers.TrainingArguments):
     tune_vision_tower: bool = field(default=False)
     tune_language_model: bool = field(default=False)
     tune_mm_projector: bool = field(default=False)
+    tune_action_head: bool = field(default=True)
+    tune_history_mamba: bool = field(default=True)
+    tune_history_projector: bool = field(default=True)
     model_dtype: str = field(default="torch.bfloat16")
     model_max_length: int = field(
         default=512,

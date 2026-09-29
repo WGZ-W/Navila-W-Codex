@@ -17,6 +17,15 @@
 
 
 from unittest import mock
+import sys
+from pathlib import Path
+
+# When launched as ``python /path/to/llava/train/train_mem.py``, Python puts
+# this file's directory on sys.path, but not the repository root. Add it before
+# importing the llava package so the entry point works from any working dir.
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from llava.train.train import train
 from llava.train.transformer_normalize_monkey_patch import patched_normalize

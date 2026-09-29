@@ -2286,7 +2286,7 @@ class DataCollatorForSupervisedDataset:
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
         # input_ids, labels = tuple([instance[key] for instance in instances]
         #                           for key in ("input_ids", "labels"))
-        input_ids, labels, images = [], [], []
+        input_ids, labels, images, action_labels, history_images = [], [], [], [], []
         for instance in instances:
             if not isinstance(instance["input_ids"], list):
                 input_ids.append(instance["input_ids"])
@@ -2296,6 +2296,14 @@ class DataCollatorForSupervisedDataset:
                 labels.append(instance["labels"])
             else:
                 labels += instance["labels"]
+            if "action_labels" in instance:
+                action_label = instance["action_labels"]
+                if isinstance(action_label, list):
+                    action_labels.extend(action_label)
+                else:
+                    action_labels.append(action_label)
+            if instance.get("history_images") is not None:
+                history_images.append(instance["history_images"])
             # Note (kentang-mit@: we do not directly push tensors to
             # images, but list of tensors.
             if instance.get("image") is not None:
@@ -2331,6 +2339,16 @@ class DataCollatorForSupervisedDataset:
             labels=labels,
             attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
         )
+        if action_labels:
+            if len(action_labels) != len(input_ids):
+                raise ValueError("A batch cannot mix OpenFly action samples with language-only samples")
+            batch["action_labels"] = torch.stack(
+                [torch.as_tensor(label, dtype=torch.long).reshape(()) for label in action_labels]
+            )
+        if history_images:
+            if len(history_images) != len(input_ids):
+                raise ValueError("A batch cannot mix samples with and without history_images")
+            batch["history_images"] = torch.stack(history_images)
 
         new_images = []
         # kentang-mit@: it is possible that some <image> tokens get removed
@@ -2649,7 +2667,8 @@ def make_supervised_data_module(
 
     train_dataset = build_dataset(data_args.data_mixture, data_args, training_args, tokenizer)
     # eval_dataset = build_dataset(data_args.eval_data_mixture, data_args, training_args, tokenizer)
-    training_args.sample_lens = [len(d) for d in train_dataset.datasets]
+    component_datasets = getattr(train_dataset, "datasets", [train_dataset])
+    training_args.sample_lens = [len(dataset) for dataset in component_datasets]
     # training_args.eval_sample_lens = [len(d) for d in eval_dataset.datasets]
 
     PROCESS_GROUP_MANAGER = get_pg_manager()

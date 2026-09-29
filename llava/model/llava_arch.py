@@ -69,6 +69,30 @@ class LlavaMetaModel(ABC):
         self.vision_tower = build_vision_tower(vision_tower_cfg, config)
         self.mm_projector = build_mm_projector(mm_projector_cfg, config)
 
+        self.history_mamba = None
+        self.history_projector = None
+        if getattr(config, "enable_history_mamba", False):
+            from llava.model.history_mamba import build_history_mamba
+
+            history_mamba_checkpoint = None
+            history_projector_checkpoint = None
+            resume_path = getattr(config, "resume_path", None)
+            if resume_path:
+                candidate = osp.join(resume_path, "history_mamba", "history_mamba.pth")
+                if osp.isfile(candidate):
+                    history_mamba_checkpoint = candidate
+                candidate = osp.join(resume_path, "history_projector", "pytorch_model.bin")
+                if osp.isfile(candidate):
+                    history_projector_checkpoint = candidate
+            self.history_mamba = build_history_mamba(config, history_mamba_checkpoint)
+            self.history_projector = torch.nn.Linear(
+                config.history_hidden_size,
+                self.llm.config.hidden_size,
+                dtype=eval(config.model_dtype),
+            )
+            if history_projector_checkpoint:
+                self.history_projector.load_state_dict(torch.load(history_projector_checkpoint, map_location="cpu"))
+
         self.post_config()
         self.is_loaded = True
 
@@ -180,6 +204,43 @@ class LlavaMetaModel(ABC):
                 state_dict=mm_projector_state_dict,
             )
             self.config.mm_projector_cfg = self.mm_projector.config
+
+        if self.get_action_head() is not None:
+            print(f"saving action_head to {osp.join(output_dir, 'action_head')}")
+            action_head_state_dict = OrderedDict(
+                {
+                    key.split("action_head.", 1)[1]: value
+                    for key, value in state_dict.items()
+                    if "action_head." in key
+                }
+            )
+            action_head_path = osp.join(output_dir, "action_head")
+            os.makedirs(action_head_path, exist_ok=True)
+            torch.save(action_head_state_dict, osp.join(action_head_path, "pytorch_model.bin"))
+
+        if self.get_history_mamba() is not None:
+            history_path = osp.join(output_dir, "history_mamba")
+            os.makedirs(history_path, exist_ok=True)
+            history_state_dict = OrderedDict(
+                {
+                    key.split("history_mamba.", 1)[1]: value
+                    for key, value in state_dict.items()
+                    if "history_mamba." in key
+                }
+            )
+            torch.save(history_state_dict, osp.join(history_path, "history_mamba.pth"))
+
+        if self.get_history_projector() is not None:
+            projector_path = osp.join(output_dir, "history_projector")
+            os.makedirs(projector_path, exist_ok=True)
+            projector_state_dict = OrderedDict(
+                {
+                    key.split("history_projector.", 1)[1]: value
+                    for key, value in state_dict.items()
+                    if "history_projector." in key
+                }
+            )
+            torch.save(projector_state_dict, osp.join(projector_path, "pytorch_model.bin"))
         ## update and save top-level config
         self.config._name_or_path = output_dir
         self.config.architectures = [self.__class__.__name__]
@@ -207,6 +268,24 @@ class LlavaMetaModel(ABC):
             mm_projector = mm_projector[0]
         return mm_projector
 
+    def get_action_head(self):
+        action_head = getattr(self, "action_head", None)
+        if type(action_head) is list:
+            action_head = action_head[0]
+        return action_head
+
+    def get_history_mamba(self):
+        history_mamba = getattr(self, "history_mamba", None)
+        if type(history_mamba) is list:
+            history_mamba = history_mamba[0]
+        return history_mamba
+
+    def get_history_projector(self):
+        history_projector = getattr(self, "history_projector", None)
+        if type(history_projector) is list:
+            history_projector = history_projector[0]
+        return history_projector
+
     def post_config(self):
         self.training = self.get_llm().training
         ## configuration
@@ -229,6 +308,12 @@ class LlavaMetaModel(ABC):
                 self.get_vision_tower().eval()
             if self.get_mm_projector() and not getattr(self.config, "tune_mm_projector", False):
                 self.get_mm_projector().eval()
+            if self.get_action_head() and not getattr(self.config, "tune_action_head", True):
+                self.get_action_head().eval()
+            if self.get_history_mamba() and not getattr(self.config, "tune_history_mamba", True):
+                self.get_history_mamba().eval()
+            if self.get_history_projector() and not getattr(self.config, "tune_history_projector", True):
+                self.get_history_projector().eval()
 
     def encode_images(self, images):
         image_features = self.get_vision_tower()(images)
@@ -257,7 +342,14 @@ class LlavaMetaForCausalLM(ABC):
 
     ## TODO move the forward function here if there is no need to override it
     def prepare_inputs_labels_for_multimodal(
-        self, input_ids, position_ids, attention_mask, past_key_values, labels, images
+        self,
+        input_ids,
+        position_ids,
+        attention_mask,
+        past_key_values,
+        labels,
+        images,
+        history_images=None,
     ):
 
         # Handle sequence parallelism
@@ -270,7 +362,7 @@ class LlavaMetaForCausalLM(ABC):
             sp_rank = PROCESS_GROUP_MANAGER.sp_rank
 
         vision_tower = self.get_vision_tower()
-        if vision_tower is None or images is None or (input_ids.shape[1] == 1 and PROCESS_GROUP_MANAGER is None):
+        if vision_tower is None or (input_ids.shape[1] == 1 and PROCESS_GROUP_MANAGER is None):
             if (
                 past_key_values is not None
                 and vision_tower is not None
@@ -307,6 +399,23 @@ class LlavaMetaForCausalLM(ABC):
         elif images.ndim == 5:  # batch_size x seq_len x image_channels
             images = images.flatten(0, 1)
         image_features = self.encode_images(images).to(self.device)
+        history_features = None
+        if history_images is not None:
+            history_mamba = self.get_history_mamba()
+            history_projector = self.get_history_projector()
+            if history_mamba is None or history_projector is None:
+                raise RuntimeError(
+                    "history_images were provided but the history stream is disabled; "
+                    "set enable_history_mamba=True when constructing the model."
+                )
+            history_parameter = next(history_mamba.parameters())
+            history_images = history_images.to(device=history_parameter.device, dtype=history_parameter.dtype)
+            history_features = history_projector(history_mamba(history_images)).to(self.device)
+            if history_features.shape[0] != input_ids.shape[0]:
+                raise ValueError(
+                    f"Received history images for batch {history_features.shape[0]}, "
+                    f"but input_ids has batch {input_ids.shape[0]}"
+                )
         # Note (kentang-mit@): image start / end is not implemented here to support pretraining.
         if getattr(self.config, "turn_mm_projector", False) and getattr(self.config, "mm_use_im_start_end", False):
             raise NotImplementedError
@@ -394,6 +503,17 @@ class LlavaMetaForCausalLM(ABC):
                             dtype=cur_labels.dtype,
                         )
                     )
+                    if history_features is not None:
+                        cur_history_features = history_features[batch_idx]
+                        cur_new_input_embeds.append(cur_history_features)
+                        cur_new_labels.append(
+                            torch.full(
+                                (cur_history_features.shape[0],),
+                                IGNORE_INDEX,
+                                device=cur_labels.device,
+                                dtype=cur_labels.dtype,
+                            )
+                        )
 
             cur_new_input_embeds = torch.cat(cur_new_input_embeds)
             cur_new_labels = torch.cat(cur_new_labels)

@@ -1,3 +1,11 @@
+import sys
+from pathlib import Path
+
+# Allow this script to load the NaVILA action classifier from the repository
+# root while preserving the original OpenFly model path as the default.
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from unrealcv import Client  
 import cv2  
@@ -444,8 +452,17 @@ def get_action(policy, processor, image_list, text, his, if_his=False, his_step=
             images.append(img)
         
     prompt = text
-    inputs = processor(prompt, images).to("cuda:0", dtype=torch.bfloat16)
-    action = policy.predict_action(**inputs, unnorm_key="vlnv1", do_sample=False)
+    if processor is None:
+        # NaVILA owns its tokenizer and image processor.  Its classifier always
+        # returns one of the ten exact OpenFly vectors.
+        target_frames = int(getattr(policy.config, "num_video_frames", len(images)))
+        if images and len(images) < target_frames:
+            images = [images[0]] * (target_frames - len(images)) + images
+        images = images[-target_frames:]
+        action = policy.predict_action(image=images, instruction=prompt)
+    else:
+        inputs = processor(prompt, images).to("cuda:0", dtype=torch.bfloat16)
+        action = policy.predict_action(**inputs, unnorm_key="vlnv1", do_sample=False)
     print("raw action:", action)
     action = action.round().astype(int)
 
@@ -499,22 +516,37 @@ def getPoseAfterMakeAction(new_pose, action):
     return [x, y, z, yaw]
 
 def main():
-    eval_info = "configs/eval_test.json"
+    eval_info = os.environ.get("OPENFLY_EVAL_INFO", "configs/eval_test.json")
 
     f = open(eval_info, 'r')
     all_eval_info = json.loads(f.read())
     f.close()
     
     # Load model
-    model_name_or_path="IPEC-COMMUNITY/openfly-agent-7b"
-    processor = AutoProcessor.from_pretrained(model_name_or_path)
-    policy = AutoModelForVision2Seq.from_pretrained(
-        model_name_or_path, 
-        attn_implementation="flash_attention_2",  # [Optional] Requires `flash_attn`
-        torch_dtype=torch.bfloat16, 
-        low_cpu_mem_usage=True, 
-        trust_remote_code=True,
-    ).to("cuda:0")
+    navila_model_path = os.environ.get("NAVILA_MODEL_PATH")
+    if navila_model_path:
+        from llava.model.builder import load_pretrained_model
+
+        eval_device = os.environ.get("NAVILA_EVAL_DEVICE", "cuda:0")
+        _, policy, _, _ = load_pretrained_model(
+            navila_model_path,
+            Path(navila_model_path).name,
+            device=eval_device,
+            device_map={"": eval_device},
+        )
+        if policy.get_action_head() is None:
+            raise ValueError(f"NaVILA checkpoint has no OpenFly action head: {navila_model_path}")
+        processor = None
+    else:
+        model_name_or_path="IPEC-COMMUNITY/openfly-agent-7b"
+        processor = AutoProcessor.from_pretrained(model_name_or_path)
+        policy = AutoModelForVision2Seq.from_pretrained(
+            model_name_or_path,
+            attn_implementation="flash_attention_2",  # [Optional] Requires `flash_attn`
+            torch_dtype=torch.bfloat16,
+            low_cpu_mem_usage=True,
+            trust_remote_code=True,
+        ).to("cuda:0")
 
     # Test metrics
     acc = 0

@@ -14,6 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import warnings
 from dataclasses import dataclass, field
 
@@ -122,3 +123,21 @@ def register_datasets_mixtures():
         description="560K Real augmented, no direction is included. (augmented aith duplicate stops only - 5x)",
     )
     add_dataset(human)
+
+    openfly = Dataset(
+        dataset_name="openfly",
+        dataset_type="openfly_rlds",
+        data_path=os.environ.get("OPENFLY_RLDS_ROOT", "/mnt/sdc/weiguanzhao/OpenFly-rlds-my"),
+        image_path=None,
+        description="OpenFly vln_history RLDS steps with eight history frames and discrete action vectors.",
+    )
+    add_dataset(openfly)
+
+    openfly_json = Dataset(
+        dataset_name="openfly_json",
+        dataset_type="openfly",
+        data_path=os.environ.get("OPENFLY_ANNOTATIONS", "/PATH_TO_DATA/OpenFly/annotations.json"),
+        image_path=os.environ.get("OPENFLY_IMAGE_ROOT", "/PATH_TO_DATA/OpenFly/images"),
+        description="Legacy JSON OpenFly trajectory adapter.",
+    )
+    add_dataset(openfly_json)

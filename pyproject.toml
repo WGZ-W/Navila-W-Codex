@@ -34,6 +34,7 @@ vila-eval = "llava.cli.eval:main"
 [project.optional-dependencies]
 train = ["deepspeed==0.9.5", "ninja", "wandb"]
 eval = ["word2number", "Levenshtein", "nltk", "pywsd", "lmms-eval"]
+rlds = ["tensorflow==2.15.0", "tensorflow-datasets==4.9.9"]
 
 [project.urls]
 "Homepage" = "https://hanlab.mit.edu/projects/vila"

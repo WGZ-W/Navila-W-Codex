@@ -97,6 +97,15 @@ def prepare_config_for_training(
     config.tune_language_model = training_args.tune_language_model
     config.tune_vision_tower = training_args.tune_vision_tower
     config.tune_mm_projector = training_args.tune_mm_projector
+    config.enable_action_head = model_args.enable_action_head
+    config.num_actions = model_args.num_actions
+    config.action_head_dropout = model_args.action_head_dropout
+    config.action_loss_weight = model_args.action_loss_weight
+    config.tune_action_head = training_args.tune_action_head
+    config.enable_history_mamba = model_args.enable_history_mamba
+    config.history_num_frames = data_args.history_num_frames
+    config.tune_history_mamba = training_args.tune_history_mamba
+    config.tune_history_projector = training_args.tune_history_projector
     # set data args
     # Get the image_aspect_ratio from the config if is defined there
     # (case of resuming from a checkpoint) or from the data_args

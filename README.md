@@ -102,6 +102,39 @@ NaVILA-Dataset
 ### Training
 The pretrain model to start from is provided in [a8cheng/navila-siglip-llama3-8b-v1.5-pretrain](https://huggingface.co/a8cheng/navila-siglip-llama3-8b-v1.5-pretrain). Please modify the data paths in `llava/data/datasets_mixture.py` and use the script in `scripts/train/sft_8frames.sh` to lanuch the training. 
 
+### OpenFly Discrete Action Head
+
+NaVILA can be fine-tuned to classify the ten valid OpenFly actions directly. The default `openfly` dataset streams the
+local TFDS/RLDS dataset at `<OPENFLY_RLDS_ROOT>/vln_history`. Each step supplies `language_instruction`, an exact
+eight-dimensional OpenFly action, a current `observation.image_1`, and `observation.history_images`. The current frame
+uses NaVILA's existing vision tower; four historical frames are encoded by a separate Vision-Mamba stream and projected
+into the language-model space, following the Journal dual-stream design. Both streams are trained together against the
+same OpenFly action objective and are used together during evaluation. Multi-GPU OpenFly training uses PyTorch DDP via
+`torchrun`, matching Journal's OpenFly fine-tuning path; it does not use DeepSpeed ZeRO.
+
+The checked dataset contains 32,406 trajectories and 450,646 action steps. TensorFlow is restricted to the CPU input
+pipeline so it does not reserve training GPU memory. Install the optional RLDS dependencies if they are not already in
+the environment, configure the dataset root, and start training with:
+
+```bash
+pip install -e '.[rlds]'
+export OPENFLY_RLDS_ROOT=/mnt/sdc/weiguanzhao/OpenFly-rlds-my
+export MODEL_PATH=/path/to/navila-checkpoint
+bash scripts/train/openfly_action_head.sh
+```
+
+The earlier JSON trajectory adapter remains available as the `openfly_json` data mixture and reads
+`OPENFLY_ANNOTATIONS` plus `OPENFLY_IMAGE_ROOT`.
+
+The checkpoint stores the classifier under `action_head/pytorch_model.bin`. To use it in OpenFly's evaluator:
+
+```bash
+export NAVILA_MODEL_PATH=/path/to/navila-openfly-action-head
+export NAVILA_EVAL_DEVICE=cuda:0
+cd OpenFly-Platform
+python train/eval.py
+```
+
 
 ## 📊 Evaluation
 

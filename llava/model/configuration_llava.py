@@ -44,6 +44,16 @@ class LlavaConfig(PretrainedConfig):
         s2_max_split_size=None,
         num_time_tokens=None,
         time_token_format=None,
+        enable_action_head=False,
+        num_actions=10,
+        action_head_dropout=0.0,
+        action_loss_weight=1.0,
+        enable_history_mamba=False,
+        history_num_frames=4,
+        history_image_size=384,
+        history_patch_size=32,
+        history_hidden_size=768,
+        history_depth=4,
         **kwargs,
     ):
         super().__init__()
@@ -71,3 +81,13 @@ class LlavaConfig(PretrainedConfig):
         self.s2_max_split_size = s2_max_split_size
         self.num_time_tokens = num_time_tokens
         self.time_token_format = time_token_format
+        self.enable_action_head = enable_action_head
+        self.num_actions = num_actions
+        self.action_head_dropout = action_head_dropout
+        self.action_loss_weight = action_loss_weight
+        self.enable_history_mamba = enable_history_mamba
+        self.history_num_frames = history_num_frames
+        self.history_image_size = history_image_size
+        self.history_patch_size = history_patch_size
+        self.history_hidden_size = history_hidden_size
+        self.history_depth = history_depth

@@ -118,7 +118,7 @@ def get_mm_adapter_state_maybe_zero_3(named_params, keys_to_match):
 def find_all_linear_names(model, lora_llm, lora_vt):
     cls = torch.nn.Linear
     lora_module_names = set()
-    multimodal_keywords = ["mm_projector", "vision_resampler"]
+    multimodal_keywords = ["mm_projector", "vision_resampler", "action_head"]
     assert lora_llm or lora_vt, "Not applying LoRA to any of the modules..."
 
     if not lora_llm:
@@ -391,6 +391,12 @@ def train():
     parser = HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
+    if model_args.enable_action_head:
+        if model_args.num_actions != 10:
+            raise ValueError("The OpenFly action head requires --num_actions 10")
+        if training_args.seq_parallel_size > 1:
+            raise ValueError("OpenFly action classification does not support sequence parallelism")
+
     # FIXME(zhijianl): This should be deprecated when we move to the new scripts.
     if os.getenv("RUN_NAME") is None:
         training_args.run_name = training_args.output_dir.split("/")[-1]
@@ -605,7 +611,15 @@ def train():
                 model.get_vision_tower().requires_grad_(training_args.tune_vision_tower)
             model.get_mm_projector().requires_grad_(training_args.tune_mm_projector)
             mprint(f"mm projector {training_args.tune_mm_projector}")
-            model.print_trainable_parameters()
+        if model.get_action_head() is not None:
+            model.get_action_head().requires_grad_(training_args.tune_action_head)
+            mprint(f"action head {training_args.tune_action_head}")
+        if model.get_history_mamba() is not None:
+            model.get_history_mamba().requires_grad_(training_args.tune_history_mamba)
+            model.get_history_projector().requires_grad_(training_args.tune_history_projector)
+            mprint(f"history Mamba {training_args.tune_history_mamba}")
+            mprint(f"history projector {training_args.tune_history_projector}")
+        model.print_trainable_parameters()
     else:
         model.get_llm().requires_grad_(training_args.tune_language_model)
         mprint(f"Tunable parameters:\nlanguage model {training_args.tune_language_model}")
@@ -614,9 +628,24 @@ def train():
             model.get_mm_projector().requires_grad_(training_args.tune_mm_projector)
             mprint(f"vision tower {training_args.tune_vision_tower}")
             mprint(f"mm projector {training_args.tune_mm_projector}")
+        if model.get_action_head() is not None:
+            model.get_action_head().requires_grad_(training_args.tune_action_head)
+            mprint(f"action head {training_args.tune_action_head}")
+        if model.get_history_mamba() is not None:
+            model.get_history_mamba().requires_grad_(training_args.tune_history_mamba)
+            model.get_history_projector().requires_grad_(training_args.tune_history_projector)
+            mprint(f"history Mamba {training_args.tune_history_mamba}")
+            mprint(f"history projector {training_args.tune_history_projector}")
 
         if not any(
-            [training_args.tune_language_model, training_args.tune_vision_tower, training_args.tune_mm_projector]
+            [
+                training_args.tune_language_model,
+                training_args.tune_vision_tower,
+                training_args.tune_mm_projector,
+                model.get_action_head() is not None and training_args.tune_action_head,
+                model.get_history_mamba() is not None and training_args.tune_history_mamba,
+                model.get_history_projector() is not None and training_args.tune_history_projector,
+            ]
         ):
             logging.warning("You are not tuning any part of the model. Please check if this is intended.")
 

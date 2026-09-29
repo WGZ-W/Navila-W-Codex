@@ -2,7 +2,7 @@ import os
 from typing import Any, Optional
 
 from hydra.utils import instantiate
-from torch.utils.data import ConcatDataset, Dataset
+from torch.utils.data import ConcatDataset, Dataset, IterableDataset
 from transformers import PreTrainedTokenizer
 
 from llava.data.datasets_mixture import DATASETS_LEGACY
@@ -19,7 +19,9 @@ def register_datasets(name: Optional[str] = None):
         logger.info(f"Registering datasets from `{name}`.")
     return io.load(os.path.join(os.path.dirname(__file__), "registry", f"{name}.yaml"))
 
+
 DATASETS = register_datasets()
+
 
 class RepeatedDataset(Dataset):
     def __init__(self, dataset: Dataset, times: int) -> None:
@@ -59,9 +61,16 @@ def build_dataset(
         else:
             raise ValueError(f"Dataset {name} is not registered.")
 
+        if times > 1 and isinstance(dataset, IterableDataset):
+            raise ValueError("Iterable RLDS datasets cannot use the '*N' repetition syntax")
         if times > 1:
             dataset = RepeatedDataset(dataset, times)
         datasets.append(dataset)
+    iterable_datasets = [dataset for dataset in datasets if isinstance(dataset, IterableDataset)]
+    if iterable_datasets:
+        if len(datasets) != 1:
+            raise ValueError("The OpenFly RLDS stream cannot currently be mixed with map-style datasets")
+        return iterable_datasets[0]
     return ConcatDataset(datasets)
 
 
@@ -72,6 +81,7 @@ def build_dataset_legacy(
     tokenizer: PreTrainedTokenizer,
 ) -> Dataset:
     from llava.data.dataset import DummyDataset, LazyEnvDropDataset, LazySupervisedDataset, LazyVLNCEDataset
+    from llava.data.openfly import OpenFlyActionDataset, OpenFlyRLDSActionDataset
 
     dataset = DATASETS_LEGACY[name]
     dataset_type = dataset.dataset_type
@@ -81,6 +91,10 @@ def build_dataset_legacy(
         dataset_cls = LazyEnvDropDataset
     elif dataset_type == "vlnce":
         dataset_cls = LazyVLNCEDataset
+    elif dataset_type == "openfly":
+        dataset_cls = OpenFlyActionDataset
+    elif dataset_type == "openfly_rlds":
+        dataset_cls = OpenFlyRLDSActionDataset
     else:
         raise NotImplementedError(f"{dataset_type} is not supported.")
 

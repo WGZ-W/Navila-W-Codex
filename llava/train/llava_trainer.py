@@ -25,7 +25,7 @@ from typing import Dict, List, Optional
 import torch
 import torch.distributed as dist
 from torch import nn
-from torch.utils.data import ConcatDataset, Dataset, DistributedSampler, RandomSampler, Sampler
+from torch.utils.data import ConcatDataset, Dataset, DistributedSampler, IterableDataset, RandomSampler, Sampler
 from transformers import PreTrainedModel, Trainer
 from transformers.modeling_utils import unwrap_model
 from transformers.trainer import ALL_LAYERNORM_LAYERS  # ShardedDDPOption,
@@ -581,6 +581,8 @@ class VILADPOTrainer(DPOTrainer):
 
 class LLaVATrainer(Trainer):
     def _get_train_sampler(self) -> Optional[torch.utils.data.Sampler]:
+        if isinstance(self.train_dataset, IterableDataset):
+            return None
         if self.train_dataset is None or not has_length(self.train_dataset):
             return None
 
